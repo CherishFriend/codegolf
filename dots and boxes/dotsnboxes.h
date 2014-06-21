@@ -12,16 +12,17 @@
 
 typedef short square_t;
 typedef short wall_t;
-typedef struct TurnList{
+typedef struct Turn turn_t;
+struct Turn{
 	int row, col;
 	wall_t wall;
 	// linked list of turns (which are valid)
-	struct TurnList* prev;
-	struct TurnList* next;
-} turn_t;
+	turn_t* prev;
+	turn_t* next;
+};
 typedef struct Board{
 	square_t* squares;
-	turn_t* valid_turns; // pointer to the sentinel of the doubly linked list of turns
+	turn_t* sentinel; // pointer to the sentinel of the doubly linked list of turns
 	int rows;
 	int cols;
 	int player_turn;
@@ -53,15 +54,15 @@ void add_turn_dll(turn_t* after, turn_t* new){
 
 /* remove the given dll entry from the list. return the node before 'turn' such that
 
-	add_turn_dll(splice_turn_dll(turn), turn);
+	add_turn_dll(remove_turn_dll(turn), turn);
 
 has net-zero-effect */
-turn_t* splice_turn_dll(turn_t* turn){
+turn_t* remove_turn_dll(turn_t* turn){
 	turn_t* set_to = turn->prev;
 	// bypass
 	turn->prev->next = turn->next;
 	turn->next->prev = turn->prev;
-	// loop to self (for later splicing)
+	// loop to self (for later adding)
 	turn->next = turn;
 	turn->prev = turn;
 	return set_to;
@@ -88,22 +89,22 @@ void stdin_to_board(board_t* empty_board){
 	memset(empty_board->squares, 0, n_squares);
 
 	// create sentinel DLL node
-	empty_board->valid_turns = make_turn_dll(0, 0, 0);
+	empty_board->sentinel = make_turn_dll(0, 0, 0);
 
 	// create all other valid turns
 	// step 1: left/top for all grid spaces
 	for(int r=0; r<rows; r++){
 		for(int c=0; c<cols; c++){
-			add_turn_dll(empty_board->valid_turns, make_turn_dll(r, c, LEFT));
-			add_turn_dll(empty_board->valid_turns, make_turn_dll(r, c, TOP));
+			add_turn_dll(empty_board->sentinel, make_turn_dll(r, c, LEFT));
+			add_turn_dll(empty_board->sentinel, make_turn_dll(r, c, TOP));
 		}
 	}
 	// step 2: fill in the rightmost walls
 	for(int r=0; r<rows; r++)
-		add_turn_dll(empty_board->valid_turns, make_turn_dll(r, cols-1, RIGHT));
+		add_turn_dll(empty_board->sentinel, make_turn_dll(r, cols-1, RIGHT));
 	// step 3: fill in the bottommost walls
 	for(int c=0; c<cols; c++)
-		add_turn_dll(empty_board->valid_turns, make_turn_dll(rows-1, c, BOTTOM));
+		add_turn_dll(empty_board->sentinel, make_turn_dll(rows-1, c, BOTTOM));
 
 	empty_board->rows = rows;
 	empty_board->cols = cols;
@@ -114,7 +115,7 @@ void stdin_to_board(board_t* empty_board){
 
 bool game_is_over(board_t* board){
 	// game is over iff only the sentinel is left
-	return board->valid_turns->next == board->valid_turns;
+	return board->sentinel->next == board->sentinel;
 }
 
 int opposite(int r, int c, wall_t typ, board_t* board){
@@ -158,14 +159,14 @@ int add_wall(int r, int c, wall_t typ, board_t* board){
 			break;
 		}
 	}
-	return board->squares[i] == 0xF + (j > -1 && board->squares[j] == 0xF);
+	return (int)(board->squares[i] == 0xF) + (int) (j > -1 && board->squares[j] == 0xF);
 }
 
 /* remove wall and return the number of un-done boxes */
 int remove_wall(int r, int c, wall_t typ, board_t* board){
 	int i = r*board->cols + c; // flat index
 	int j = opposite(r, c, typ, board);
-	int undone_boxes = board->squares[i] == 0xF + (j > -1 && board->squares[j] == 0xF);
+	int undone_boxes = (int)(board->squares[i] == 0xF) + (int)(j > -1 && board->squares[j] == 0xF);
 	if(j > -1){
 		switch(typ){
 		case TOP:
@@ -218,12 +219,12 @@ void unexecute_turn(turn_t* turn, board_t* board){
 void cleanup(board_t* board){
 	free(board->squares);
 	// free DLL
-	while(board->valid_turns->next != board->valid_turns){
-		turn_t* rem = board->valid_turns->next;
-		splice_turn_dll(rem);
+	while(board->sentinel->next != board->sentinel){
+		turn_t* rem = board->sentinel->next;
+		remove_turn_dll(rem);
 		free(rem);
 	}
-	free(board->valid_turns);
+	free(board->sentinel);
 }
 
 /* generic printouts at end */

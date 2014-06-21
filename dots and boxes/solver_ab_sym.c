@@ -1,31 +1,24 @@
-#include "dotsnboxes.h"
+#include "dotsnboxes_symmetries.h"
 
-turn_t* minimax_ab(board_t* board, int maximizer, int* final_value, long int* turn_count, int depth, int alpha, int beta){
+turn_t* minimax_ab(board_t* board, int maximizer, int* final_value, long int* turn_count, int alpha, int beta){
 	// only one base case: all the way to the end. careful with large boards!
 	if(game_is_over(board)){
 		(*final_value) = board->scores[maximizer] - board->scores[1-maximizer];
 		return NULL;
 	}
-	turn_t* sentinel = board->sentinel;
+	turn_t* sentinel = board->valid_turns;
 	turn_t* best_turn = sentinel;
 	bool max = board->player_turn == maximizer;
 	int score, best_score = max ? INT_MIN : INT_MAX;
 	// loop over all possible turns
+	int t = 0;
 	for(turn_t* current_turn = sentinel->next; current_turn != sentinel; current_turn = current_turn->next){
-#ifdef DEBUG
-		printf("%d\t", board->player_turn);
-#endif
-		// perform turn, remove it from DLLs
+		// perform turn, remove it from DLL
 		execute_turn(current_turn, board);
 		turn_t* memo = remove_turn_dll(current_turn);
-		// we count all calls of execute_turn for stats on pruning factor
 		(*turn_count)++;
-#ifdef DEBUG
-		for(int i=0; i<depth; ++i) printf(" ");
-		printf("%d %d %d : %d %d\n", current_turn->row, current_turn->col, current_turn->wall, board->scores[0], board->scores[1]);
-#endif
 		// recurse to next level of the tree
-		minimax_ab(board, maximizer, &score, turn_count, depth+1, alpha, beta);
+		minimax_ab(board, maximizer, &score, turn_count, alpha, beta);
 		// recursion done; undo move
 		add_turn_dll(memo, current_turn);
 		unexecute_turn(current_turn, board);
@@ -41,6 +34,7 @@ turn_t* minimax_ab(board_t* board, int maximizer, int* final_value, long int* tu
 			beta = best_score;
 		}
 		if(beta <= alpha) break;
+		t++;
 	}
 	(*final_value) = best_score;
 	return best_turn;
@@ -52,7 +46,7 @@ int main(){
 
 	long int count = 0;
 	int best_outcome;
-	turn_t* best_turn = minimax_ab(&board, 0, &best_outcome, &count, 0, INT_MIN, INT_MAX);
+	turn_t* best_turn = minimax_ab(&board, 0, &best_outcome, &count, INT_MIN, INT_MAX);
 
 	stats(&board, best_turn, best_outcome, count);
 

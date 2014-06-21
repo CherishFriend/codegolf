@@ -47,7 +47,6 @@ struct Turn{
 typedef struct Board{
 	square_t* squares;
 	turn_t* sentinel; // pointer to the sentinel of _all_ DLLs
-	int n_lists;
 	int rows;
 	int cols;
 	int player_turn;
@@ -89,10 +88,10 @@ void add_turn_dll(int list_id, turn_t* after, turn_t* new){
 
 /* remove the given dll entry from the specified list. return the node before 'turn' such that
 
-	add_turn_dll(l, splice_turn_dll(l, turn), turn);
+	add_turn_dll(l, remove_turn_dll(l, turn), turn);
 
 has net-zero-effect */
-turn_t* splice_turn_dll(int list_id, turn_t* turn){
+turn_t* remove_turn_dll(int list_id, turn_t* turn){
 	turn_t* set_to = turn->prevs[list_id];
 	// bypass
 	turn->prevs[list_id]->nexts[list_id] = turn->nexts[list_id];
@@ -211,11 +210,6 @@ void stdin_to_board(board_t* empty_board){
 	empty_board->squares = (square_t*) malloc(sizeof(square_t) * n_squares);
 	memset(empty_board->squares, 0, n_squares);
 
-	// there is always the 0th list.
-	// square boards have 7 symmetries
-	// non-square boards have 3
-	empty_board->n_lists = rows == cols ? 8 : 4;
-
 	// create sentinel DLL node
 	// (marked as sentinel by having zero as its wall)
 	empty_board->sentinel =  make_turn_dll(0, 0, 0, MAX_SYMMETRIES);
@@ -318,7 +312,7 @@ int opposite(int r, int c, wall_t typ, board_t* board){
 	return -1;
 }
 
-/* add a wall (make a mark in board->squares) and return the number of completed boxes*/
+/* add a wall and return the number of completed boxes*/
 int add_wall(int r, int c, wall_t typ, board_t* board){
 	int i = r*board->cols + c; // flat index
 	board->squares[i] |= typ;
@@ -340,14 +334,14 @@ int add_wall(int r, int c, wall_t typ, board_t* board){
 			break;
 		}
 	}
-	return board->squares[i] == 0xF + (j > -1 && board->squares[j] == 0xF);
+	return (int)(board->squares[i] == 0xF) + (int) (j > -1 && board->squares[j] == 0xF);
 }
 
-/* remove wall (undo add_wall) and return the number of un-done boxes */
+/* remove wall and return the number of un-done boxes */
 int remove_wall(int r, int c, wall_t typ, board_t* board){
 	int i = r*board->cols + c; // flat index
 	int j = opposite(r, c, typ, board);
-	int undone_boxes = board->squares[i] == 0xF + (j > -1 && board->squares[j] == 0xF);
+	int undone_boxes = (int)(board->squares[i] == 0xF) + (int)(j > -1 && board->squares[j] == 0xF);
 	if(j > -1){
 		switch(typ){
 		case TOP:
@@ -404,7 +398,7 @@ void execute_and_update_lists(turn_t* turn, board_t* board, turn_t** memos){
 	//               3) add this turn's symmetric pair(s) to the lists of pairs which need to be played to regain symmetry (if that pair is yet unplayed)
 	for(int s=0; s<MAX_SYMMETRIES; ++s){
 		if(turn_in_list(turn, s)){
-			memos[s] = splice_turn_dll(s, turn);
+			memos[s] = remove_turn_dll(s, turn);
 		}
 		if(s > 0 && turn->pairs[s] != NULL && !turn_played(turn->pairs[s])){
 			add_turn_dll(s, board->sentinel, turn->pairs[s]);
@@ -422,7 +416,7 @@ void unexecute_and_update_lists(turn_t* turn, board_t* board, turn_t** memos){
 			add_turn_dll(s, board->sentinel, turn);
 		}
 		if(s > 0 && turn->pairs[s] != NULL){
-			splice_turn_dll(s, turn->pairs[s]);
+			remove_turn_dll(s, turn->pairs[s]);
 		}
 	}
 }
@@ -433,7 +427,7 @@ void cleanup(board_t* board){
 	while(board->sentinel->nexts[0] != board->sentinel){
 		turn_t* rem = board->sentinel->nexts[0];
 		for(int l=0; l<board->n_lists; ++l)
-			splice_turn_dll(l, rem);
+			remove_turn_dll(l, rem);
 		free(rem->nexts);
 		free(rem->prevs);
 		free(rem->pairs);

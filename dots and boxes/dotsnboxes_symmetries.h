@@ -47,6 +47,7 @@ struct Turn{
 typedef struct Board{
 	square_t* squares;
 	turn_t* sentinel; // pointer to the sentinel of _all_ DLLs
+	int n_lists;
 	int rows;
 	int cols;
 	int player_turn;
@@ -169,6 +170,8 @@ void symmetry(int type, turn_t* turn, turn_t* dest, board_t* board){
 	case ROT_180:
 		sym_rot_180(turn, dest, board);
 		break;
+	// the following 4 symmetries only work for square boards, but we make no check here.
+	// it is the calling function's responsibility to only use valid symmetries
 	case ROT_90:
 		sym_rot_90(turn, dest, board);
 		break;
@@ -205,6 +208,8 @@ void stdin_to_board(board_t* empty_board){
 	empty_board->player_turn = 0;
 	empty_board->scores[0] = 0;
 	empty_board->scores[1] = 0;
+	// square boards have extra symmetries (90- and 270-degree rotations and diagonal reflections)
+	empty_board->n_lists = rows == cols ? 8 : 4;
 
 	int n_squares = rows * cols;
 	empty_board->squares = (square_t*) malloc(sizeof(square_t) * n_squares);
@@ -212,22 +217,22 @@ void stdin_to_board(board_t* empty_board){
 
 	// create sentinel DLL node
 	// (marked as sentinel by having zero as its wall)
-	empty_board->sentinel =  make_turn_dll(0, 0, 0, MAX_SYMMETRIES);
+	empty_board->sentinel =  make_turn_dll(0, 0, 0, empty_board->n_lists);
 
 	// create all other valid turns
 	// step 1: left/top for all grid spaces
 	for(int r=0; r<rows; r++){
 		for(int c=0; c<cols; c++){
-			add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, c, LEFT, MAX_SYMMETRIES));
-			add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, c, TOP, MAX_SYMMETRIES));
+			add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, c, LEFT, empty_board->n_lists));
+			add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, c, TOP, empty_board->n_lists));
 		}
 	}
 	// step 2: fill in the rightmost walls
 	for(int r=0; r<rows; r++)
-		add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, cols-1, RIGHT, MAX_SYMMETRIES));
+		add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, cols-1, RIGHT, empty_board->n_lists));
 	// step 3: fill in the bottommost walls
 	for(int c=0; c<cols; c++)
-		add_turn_dll(0, empty_board->sentinel, make_turn_dll(rows-1, c, BOTTOM, MAX_SYMMETRIES));
+		add_turn_dll(0, empty_board->sentinel, make_turn_dll(rows-1, c, BOTTOM, empty_board->n_lists));
 
 	// set up symmetric pairs
 	turn_t dummy;
@@ -382,6 +387,22 @@ void execute_turn(turn_t* turn, board_t* board){
 	}
 }
 
+void prepare_symmetry_lists_for_recursion(turn_t* turn, board_t* board){
+	// two things: 1) remove this turn from list of turns required for each symmetry
+	//             2) remember where the current turn fell in each DLL (so it can be undone after recursion). this info is held in 'prevs'
+	for(int s=0; s<board->n_lists; ++s){
+		if(turn_in_list(turn, s)){
+			turn->prevs[s] = remove_turn_dll(s, turn);
+		}
+	}
+	// more things: add symmetric pairs to symmetry lists
+	for(int s=1; s<board->n_lists; ++s){
+		if(turn->pairs[s] != NULL && !turn_played(turn->pairs[s])){
+			add_turn_dll(s, board->sentinel, turn->pairs[s]);
+		}
+	}
+}
+
 void unexecute_turn(turn_t* turn, board_t* board){
 	int opened_boxes = remove_wall(turn->row, turn->col, turn->wall, board);
 	if(opened_boxes > 0){
@@ -391,33 +412,11 @@ void unexecute_turn(turn_t* turn, board_t* board){
 	}
 }
 
-void execute_and_update_lists(turn_t* turn, board_t* board, turn_t** memos){
-	execute_turn(turn, board);
-	// three things: 1) remove this turn from list of turns required for each symmetry
-	//               2) remember, for this stack frame, where the current turn fell in each DLL (so it can be undone after recursion)
-	//               3) add this turn's symmetric pair(s) to the lists of pairs which need to be played to regain symmetry (if that pair is yet unplayed)
-	for(int s=0; s<MAX_SYMMETRIES; ++s){
-		if(turn_in_list(turn, s)){
-			memos[s] = remove_turn_dll(s, turn);
-		}
-		if(s > 0 && turn->pairs[s] != NULL && !turn_played(turn->pairs[s])){
-			add_turn_dll(s, board->sentinel, turn->pairs[s]);
-		}
-	}
-}
-
-void unexecute_and_update_lists(turn_t* turn, board_t* board, turn_t** memos){
-	unexecute_turn(turn, board);
-	for(int s=0; s<MAX_SYMMETRIES; ++s){
-		if(memos[s] != NULL){
-			add_turn_dll(s, memos[s], turn);
-		}
-		else if(s > 0 && turn->inverse_pairs[s] != NULL && turn_played(turn->inverse_pairs[s])){
-			add_turn_dll(s, board->sentinel, turn);
-		}
-		if(s > 0 && turn->pairs[s] != NULL){
-			remove_turn_dll(s, turn->pairs[s]);
-		}
+void repair_list(turn_t* turn, int list_id){
+	turn_t* add_after = turn->prevs[list_id];
+	turn->prevs[list_id] = turn;
+	if(add_after != turn){
+		add_turn_dll(list_id, add_after, turn);
 	}
 }
 

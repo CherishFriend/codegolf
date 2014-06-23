@@ -13,31 +13,15 @@ turn_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_
 	bool max = board->player_turn == maximizer;
 	int score, best_score = max ? INT_MIN : INT_MAX;
 	bool symmetries[MAX_SYMMETRIES];
-	turn_t* memos[MAX_SYMMETRIES];
-	for(int s=1; s<MAX_SYMMETRIES; ++s){
+	for(int s=1; s<board->n_lists; ++s){
 		symmetries[s] = has_symmetry(board, s);
-		memos[s] = NULL;
 	}
-#ifdef DEBUG
-	for(int s=0; s<MAX_SYMMETRIES; ++s){
-		printf("%d : [", s);
-		int i=0;
-		for(turn_t* t=board->sentinel->nexts[s]; t != board->sentinel && i<8; t = t->nexts[s], i++){
-			printf("(%d,%d,%d), ", t->row, t->col, t->wall);
-			if(t->nexts[s] == t){
-				printf(" -problem- ");
-				break;
-			}
-		}
-		printf("]\n");
-	}
-#endif
 	// loop over all possible turns
 	for(turn_t* current_turn = board->sentinel->nexts[0]; current_turn != board->sentinel; current_turn = current_turn->nexts[0]){
 		// check if we can prune this turn based on symmetries
 		bool current_is_symmetric_to_another_previously_used = false;
-		for(int s=1; s<MAX_SYMMETRIES; ++s){
-			if(symmetries[s] && turn_in_list(current_turn, s) && current_turn->pairs[s] != NULL){
+		for(int s=1; s<board->n_lists; ++s){
+			if(symmetries[s] && turn_in_list(current_turn, s)){
 				// the s'th list started out as empty. if now current_turn is in it, then its symmetry has been played already
 #ifdef DEBUG
 				turn_t* pair = current_turn->pairs[s];
@@ -51,7 +35,8 @@ turn_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_
 		// opportunity to prune the rest of this subtree if a symmetry has already been played
 		if(current_is_symmetric_to_another_previously_used) continue;
 		// perform turn, remove it from DLLs
-		execute_and_update_lists(current_turn, board, memos);
+		execute_turn(current_turn, board);
+		prepare_symmetry_lists_for_recursion(current_turn, board);
 		// we count all calls of execute_turn for stats on pruning factor
 		(*turn_count)++;
 #ifdef DEBUG
@@ -61,7 +46,9 @@ turn_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_
 		// recurse to next level of the tree (without current_turn as an option anymore)
 		minimax(board, maximizer, &score, turn_count, depth+1);
 		// recursion done; undo move
-		unexecute_and_update_lists(current_turn, board, memos);
+		unexecute_turn(current_turn, board);
+		// undo splice from 0th list (others will have to come outside this loop)
+		repair_list(current_turn, 0);
 		if(max){
 			// MAX algorithm
 			best_turn = score > best_score ? current_turn : best_turn;
@@ -70,6 +57,13 @@ turn_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_
 			// MIN algorithm
 			best_turn = score < best_score ? current_turn : best_turn;
 			best_score = min(best_score, score);
+		}
+	}
+	// repair lists to state they were in before this function call
+	for(turn_t* current_turn = board->sentinel->nexts[0]; current_turn != board->sentinel; current_turn = current_turn->nexts[0]){
+		// undo prepare_symmetry_lists_for_recursion for symmetry lists (list 0 already repaired)
+		for(int s=1; s<board->n_lists; ++s){
+			repair_list(current_turn, s);
 		}
 	}
 	(*final_value) = best_score;

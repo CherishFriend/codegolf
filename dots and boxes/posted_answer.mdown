@@ -1,20 +1,22 @@
-## C99 - 2x3 board in 44.5s
-
-Here's a fairly naive solution to get things started.
+## C99 - 2x3 board in 20.7s
 
 __Edit:__ I refactored my code and did some deeper analysis on the results.
+
+__Further Edits:__ Added pruning by symmetries. This makes 4 algorithm configurations: with or without symmetries X with or without alpha-beta pruning
 
 Primary features:
 
 * straightforward implementation of minimax with alpha-beta pruning
 * very little memory management (maintains dll of valid moves; O(1) updates per branch in the tree search)
+* second file with pruning by symmetries. Still achieves O(1) updates per branch (technically O(S) where S is the number of symmetries. This is 7 for square boards and 3 for non-square boards)
+* compile with `-DDEBUG` for printouts
 
 Potential improvements:
 
-* prune symmetries
 * memoization
-* <strike>fix small memory leak</strike> fixed in edit.
-* <strike>alpha/beta pruning added</strike> in 2nd edit
+* <strike>fix small memory leak</strike> fixed in first edit
+* <strike>alpha/beta pruning</strike> added in 2nd edit
+* <strike>prune symmetries</strike> added in 3rd edit (note that symmetries are _not_ handled by memoization, so that remains a separate optimization.)
 
 __Brute-Force Minimax__
 
@@ -23,29 +25,34 @@ __Brute-Force Minimax__
 	/* brute-force search of the _entire game tree_.
 		at completion, final_value will be the best value for 'maximizer'.
 		returns a pointer to the best move. */
-	turn_dll_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_count, int depth){
+	turn_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_count, int depth){
 		// only one base case: all the way to the end. careful with large boards!
 		if(game_is_over(board)){
 			(*final_value) = board->scores[maximizer] - board->scores[1-maximizer];
 			return NULL;
 		}
-		turn_dll_t* sentinel = board->valid_turns;
-		turn_dll_t* best_turn = sentinel;
+		turn_t* best_turn = board->sentinel;
 		bool max = board->player_turn == maximizer;
 		int score, best_score = max ? INT_MIN : INT_MAX;
 		// loop over all possible turns
-		for(turn_dll_t* current_turn = sentinel->next; current_turn != sentinel; current_turn = current_turn->next){
-			// perform turn, remove it from DLL
+		for(turn_t* current_turn = board->sentinel->next; current_turn != board->sentinel; current_turn = current_turn->next){
+	#ifdef DEBUG
+			printf("%d\t", board->player_turn);
+	#endif
+			// perform turn, remove it from DLLs
 			execute_turn(current_turn, board);
-			turn_dll_t* memo = splice_turn_dll(current_turn);
+			turn_t* memo = remove_turn_dll(current_turn);
+			// we count all calls of execute_turn for stats on pruning factor
 			(*turn_count)++;
-			// for(int i=0; i<depth; ++i) printf(" ");
-			// 	printf("%d %d %d\n", current_turn->row, current_turn->col, current_turn->wall);
+	#ifdef DEBUG
+			for(int i=0; i<depth; ++i) printf(" ");
+			printf("%d %d %d : %d %d\n", current_turn->row, current_turn->col, current_turn->wall, board->scores[0], board->scores[1]);
+	#endif
 			// recurse to next level of the tree (without current_turn as an option anymore)
 			minimax(board, maximizer, &score, turn_count, depth+1);
 			// recursion done; undo move
-			add_turn_dll(memo, current_turn);
 			unexecute_turn(current_turn, board);
+			add_turn_dll(memo, current_turn);
 			if(max){
 				// MAX algorithm
 				best_turn = score > best_score ? current_turn : best_turn;
@@ -67,7 +74,7 @@ __Brute-Force Minimax__
 		long int count = 0;
 
 		int best_outcome;
-		turn_dll_t* best_turn = minimax(&board, 0, &best_outcome, &count, 0);
+		turn_t* best_turn = minimax(&board, 0, &best_outcome, &count, 0);
 
 		stats(&board, best_turn, best_outcome, count);
 
@@ -80,25 +87,32 @@ __With Alpha-Beta Pruning__
 
 	#include "dotsnboxes.h"
 
-	turn_dll_t* minimax_ab(board_t* board, int maximizer, int* final_value, long int* turn_count, int alpha, int beta){
+	turn_t* minimax_ab(board_t* board, int maximizer, int* final_value, long int* turn_count, int depth, int alpha, int beta){
 		// only one base case: all the way to the end. careful with large boards!
 		if(game_is_over(board)){
 			(*final_value) = board->scores[maximizer] - board->scores[1-maximizer];
 			return NULL;
 		}
-		turn_dll_t* sentinel = board->valid_turns;
-		turn_dll_t* best_turn = sentinel;
+		turn_t* sentinel = board->sentinel;
+		turn_t* best_turn = sentinel;
 		bool max = board->player_turn == maximizer;
 		int score, best_score = max ? INT_MIN : INT_MAX;
 		// loop over all possible turns
-		int t = 0;
-		for(turn_dll_t* current_turn = sentinel->next; current_turn != sentinel; current_turn = current_turn->next){
-			// perform turn, remove it from DLL
+		for(turn_t* current_turn = sentinel->next; current_turn != sentinel; current_turn = current_turn->next){
+	#ifdef DEBUG
+			printf("%d\t", board->player_turn);
+	#endif
+			// perform turn, remove it from DLLs
 			execute_turn(current_turn, board);
-			turn_dll_t* memo = splice_turn_dll(current_turn);
+			turn_t* memo = remove_turn_dll(current_turn);
+			// we count all calls of execute_turn for stats on pruning factor
 			(*turn_count)++;
+	#ifdef DEBUG
+			for(int i=0; i<depth; ++i) printf(" ");
+			printf("%d %d %d : %d %d\n", current_turn->row, current_turn->col, current_turn->wall, board->scores[0], board->scores[1]);
+	#endif
 			// recurse to next level of the tree
-			minimax_ab(board, maximizer, &score, turn_count, alpha, beta);
+			minimax_ab(board, maximizer, &score, turn_count, depth+1, alpha, beta);
 			// recursion done; undo move
 			add_turn_dll(memo, current_turn);
 			unexecute_turn(current_turn, board);
@@ -114,7 +128,6 @@ __With Alpha-Beta Pruning__
 				beta = best_score;
 			}
 			if(beta <= alpha) break;
-			t++;
 		}
 		(*final_value) = best_score;
 		return best_turn;
@@ -126,7 +139,7 @@ __With Alpha-Beta Pruning__
 
 		long int count = 0;
 		int best_outcome;
-		turn_dll_t* best_turn = minimax_ab(&board, 0, &best_outcome, &count, INT_MIN, INT_MAX);
+		turn_t* best_turn = minimax_ab(&board, 0, &best_outcome, &count, 0, INT_MIN, INT_MAX);
 
 		stats(&board, best_turn, best_outcome, count);
 
@@ -142,36 +155,38 @@ __Shared Header File dotsnboxes.h__
 	#include <string.h>
 	#include <stdbool.h>
 	#include <limits.h>
-
-	typedef short square_t;
-	typedef short wall_t;
-	typedef struct TurnList{
-		int row, col;
-		wall_t wall;
-		// linked list of turns (which are valid)
-		struct TurnList* prev;
-		struct TurnList* next;
-	} turn_dll_t;
-	typedef struct Board{
-		square_t* squares;
-		turn_dll_t* valid_turns; // pointer to the sentinel of the doubly linked list of turns
-		int rows;
-		int cols;
-		int player_turn;
-		int scores[2];
-	} board_t;
+	#include <assert.h>
 
 	#define TOP 0x1
 	#define BOTTOM 0x2
 	#define LEFT 0x4
 	#define RIGHT 0x8
 
+	typedef short square_t;
+	typedef short wall_t;
+	typedef struct Turn turn_t;
+	struct Turn{
+		int row, col;
+		wall_t wall;
+		// linked list of turns (which are valid)
+		turn_t* prev;
+		turn_t* next;
+	};
+	typedef struct Board{
+		square_t* squares;
+		turn_t* sentinel; // pointer to the sentinel of the doubly linked list of turns
+		int rows;
+		int cols;
+		int player_turn;
+		int scores[2];
+	} board_t;
+
 	// usually bad practice, but ok for small code
 	#define max(a,b) (a) > (b) ? (a) : (b)
 	#define min(a,b) (a) < (b) ? (a) : (b)
 
-	turn_dll_t* make_turn_dll(int r, int c, wall_t wall){
-		turn_dll_t* new_turn = (turn_dll_t*) malloc(sizeof(turn_dll_t));
+	turn_t* make_turn_dll(int r, int c, wall_t wall){
+		turn_t* new_turn = (turn_t*) malloc(sizeof(turn_t));
 		new_turn->wall = wall; // sentinel value
 		new_turn->row = r;
 		new_turn->col = c;
@@ -182,7 +197,7 @@ __Shared Header File dotsnboxes.h__
 	}
 
 	/* insert the 'new' dll node between 'after' and 'after->next' */
-	void add_turn_dll(turn_dll_t* after, turn_dll_t* new){
+	void add_turn_dll(turn_t* after, turn_t* new){
 		new->next = after->next;
 		after->next->prev = new;
 		after->next = new;
@@ -191,15 +206,15 @@ __Shared Header File dotsnboxes.h__
 
 	/* remove the given dll entry from the list. return the node before 'turn' such that
 
-		add_turn_dll(splice_turn_dll(turn), turn);
+		add_turn_dll(remove_turn_dll(turn), turn);
 
 	has net-zero-effect */
-	turn_dll_t* splice_turn_dll(turn_dll_t* turn){
-		turn_dll_t* set_to = turn->prev;
+	turn_t* remove_turn_dll(turn_t* turn){
+		turn_t* set_to = turn->prev;
 		// bypass
 		turn->prev->next = turn->next;
 		turn->next->prev = turn->prev;
-		// loop to self (for later splicing)
+		// loop to self (for later adding)
 		turn->next = turn;
 		turn->prev = turn;
 		return set_to;
@@ -226,22 +241,22 @@ __Shared Header File dotsnboxes.h__
 		memset(empty_board->squares, 0, n_squares);
 
 		// create sentinel DLL node
-		empty_board->valid_turns = make_turn_dll(0, 0, 0);
+		empty_board->sentinel = make_turn_dll(0, 0, 0);
 
 		// create all other valid turns
 		// step 1: left/top for all grid spaces
 		for(int r=0; r<rows; r++){
 			for(int c=0; c<cols; c++){
-				add_turn_dll(empty_board->valid_turns, make_turn_dll(r, c, LEFT));
-				add_turn_dll(empty_board->valid_turns, make_turn_dll(r, c, TOP));
+				add_turn_dll(empty_board->sentinel, make_turn_dll(r, c, LEFT));
+				add_turn_dll(empty_board->sentinel, make_turn_dll(r, c, TOP));
 			}
 		}
 		// step 2: fill in the rightmost walls
 		for(int r=0; r<rows; r++)
-			add_turn_dll(empty_board->valid_turns, make_turn_dll(r, cols-1, RIGHT));
+			add_turn_dll(empty_board->sentinel, make_turn_dll(r, cols-1, RIGHT));
 		// step 3: fill in the bottommost walls
 		for(int c=0; c<cols; c++)
-			add_turn_dll(empty_board->valid_turns, make_turn_dll(rows-1, c, BOTTOM));
+			add_turn_dll(empty_board->sentinel, make_turn_dll(rows-1, c, BOTTOM));
 
 		empty_board->rows = rows;
 		empty_board->cols = cols;
@@ -252,7 +267,7 @@ __Shared Header File dotsnboxes.h__
 
 	bool game_is_over(board_t* board){
 		// game is over iff only the sentinel is left
-		return board->valid_turns->next == board->valid_turns;
+		return board->sentinel->next == board->sentinel;
 	}
 
 	int opposite(int r, int c, wall_t typ, board_t* board){
@@ -296,14 +311,14 @@ __Shared Header File dotsnboxes.h__
 				break;
 			}
 		}
-		return board->squares[i] == 0xF + (j > -1 && board->squares[j] == 0xF);
+		return (int)(board->squares[i] == 0xF) + (int) (j > -1 && board->squares[j] == 0xF);
 	}
 
 	/* remove wall and return the number of un-done boxes */
 	int remove_wall(int r, int c, wall_t typ, board_t* board){
 		int i = r*board->cols + c; // flat index
 		int j = opposite(r, c, typ, board);
-		int undone_boxes = board->squares[i] == 0xF + (j > -1 && board->squares[j] == 0xF);
+		int undone_boxes = (int)(board->squares[i] == 0xF) + (int)(j > -1 && board->squares[j] == 0xF);
 		if(j > -1){
 			switch(typ){
 			case TOP:
@@ -335,7 +350,7 @@ __Shared Header File dotsnboxes.h__
 		printf("%d : %d\n", board->scores[0], board->scores[1]);
 	}
 
-	void execute_turn(turn_dll_t* turn, board_t* board){
+	void execute_turn(turn_t* turn, board_t* board){
 		int closed_boxes = add_wall(turn->row, turn->col, turn->wall, board);
 		if(closed_boxes > 0){
 			board->scores[board->player_turn] += closed_boxes;
@@ -344,7 +359,7 @@ __Shared Header File dotsnboxes.h__
 		}
 	}
 
-	void unexecute_turn(turn_dll_t* turn, board_t* board){
+	void unexecute_turn(turn_t* turn, board_t* board){
 		int opened_boxes = remove_wall(turn->row, turn->col, turn->wall, board);
 		if(opened_boxes > 0){
 			board->scores[board->player_turn] -= opened_boxes;
@@ -356,16 +371,16 @@ __Shared Header File dotsnboxes.h__
 	void cleanup(board_t* board){
 		free(board->squares);
 		// free DLL
-		while(board->valid_turns->next != board->valid_turns){
-			turn_dll_t* rem = board->valid_turns->next;
-			splice_turn_dll(rem);
+		while(board->sentinel->next != board->sentinel){
+			turn_t* rem = board->sentinel->next;
+			remove_turn_dll(rem);
 			free(rem);
 		}
-		free(board->valid_turns);
+		free(board->sentinel);
 	}
 
 	/* generic printouts at end */
-	void stats(board_t* board, turn_dll_t* best_turn, int best_outcome, long int count_turns){
+	void stats(board_t* board, turn_t* best_turn, int best_outcome, long int count_turns){
 		if(best_outcome > 0)
 			printf("win\n");
 		else if(best_outcome < 0)
@@ -399,6 +414,661 @@ __Shared Header File dotsnboxes.h__
 		printf("%ld turns taken\n", count_turns);
 	}
 
+__Simple Symmetry Pruning__
+
+	#include "dotsnboxes_symmetries.h"
+
+	/* brute-force search of the _entire game tree_.
+		at completion, final_value will be the best value for 'maximizer'.
+		returns a pointer to the best move. */
+	turn_t* minimax(board_t* board, int maximizer, int* final_value, long int* turn_count, int depth){
+		// only one base case: all the way to the end. careful with large boards!
+		if(game_is_over(board)){
+			(*final_value) = board->scores[maximizer] - board->scores[1-maximizer];
+			return NULL;
+		}
+		turn_t* best_turn = board->sentinel;
+		bool max = board->player_turn == maximizer;
+		int score, best_score = max ? INT_MIN : INT_MAX;
+		bool symmetries[MAX_SYMMETRIES];
+		for(int s=1; s<board->n_lists; ++s){
+			symmetries[s] = has_symmetry(board, s);
+		}
+		// loop over all possible turns
+		for(turn_t* current_turn = board->sentinel->nexts[0]; current_turn != board->sentinel; current_turn = current_turn->nexts[0]){
+			// check if we can prune this turn based on symmetries
+			bool current_is_symmetric_to_another_previously_used = false;
+			for(int s=1; s<board->n_lists; ++s){
+				if(symmetries[s] && turn_in_list(current_turn, s)){
+					// the s'th list started out as empty. if now current_turn is in it, then its symmetry has been played already
+	#ifdef DEBUG
+					turn_t* pair = current_turn->pairs[s];
+					for(int i=0; i<depth; ++i) printf(" ");
+					printf("~(%d %d %d)~ <=%d=> %d %d %d\n", current_turn->row, current_turn->col, current_turn->wall, s, pair->row, pair->col, pair->wall);
+	#endif
+					current_is_symmetric_to_another_previously_used = true;
+					break;
+				}
+			}
+			// opportunity to prune the rest of this subtree if a symmetry has already been played
+			if(current_is_symmetric_to_another_previously_used) continue;
+			// perform turn, remove it from DLLs
+			execute_turn(current_turn, board);
+			prepare_symmetry_lists_for_recursion(current_turn, board);
+			// we count all calls of execute_turn for stats on pruning factor
+			(*turn_count)++;
+	#ifdef DEBUG
+			for(int i=0; i<depth; ++i) printf(" ");
+			printf("%d %d %d\n", current_turn->row, current_turn->col, current_turn->wall);
+	#endif
+			// recurse to next level of the tree (without current_turn as an option anymore)
+			minimax(board, maximizer, &score, turn_count, depth+1);
+			// recursion done; undo move
+			unexecute_turn(current_turn, board);
+			// undo splice from 0th list (others will have to come outside this loop)
+			repair_list(current_turn, 0);
+			if(max){
+				// MAX algorithm
+				best_turn = score > best_score ? current_turn : best_turn;
+				best_score = max(best_score, score);
+			} else{
+				// MIN algorithm
+				best_turn = score < best_score ? current_turn : best_turn;
+				best_score = min(best_score, score);
+			}
+		}
+		// repair lists to state they were in before this function call
+		for(turn_t* current_turn = board->sentinel->nexts[0]; current_turn != board->sentinel; current_turn = current_turn->nexts[0]){
+			// undo prepare_symmetry_lists_for_recursion for symmetry lists (list 0 already repaired)
+			for(int s=1; s<board->n_lists; ++s){
+				repair_list(current_turn, s);
+			}
+		}
+		(*final_value) = best_score;
+		return best_turn;
+	}
+
+	int main(){
+		board_t board;
+		stdin_to_board(&board);
+
+		long int count = 0;
+
+		int best_outcome;
+		turn_t* best_turn = minimax(&board, 0, &best_outcome, &count, 0);
+
+		stats(&board, best_turn, best_outcome, count);
+
+		cleanup(&board);
+		
+		return 0;
+	}
+
+__Symmetry Pruning with Alpha-Beta__
+
+	#include "dotsnboxes_symmetries.h"
+
+	turn_t* minimax_ab(board_t* board, int maximizer, int* final_value, long int* turn_count, int depth, int alpha, int beta){
+		// only one base case: all the way to the end. careful with large boards!
+		if(game_is_over(board)){
+			(*final_value) = board->scores[maximizer] - board->scores[1-maximizer];
+			return NULL;
+		}
+		turn_t* best_turn = board->sentinel;
+		bool max = board->player_turn == maximizer;
+		int score, best_score = max ? INT_MIN : INT_MAX;
+		bool symmetries[MAX_SYMMETRIES];
+		for(int s=1; s<board->n_lists; ++s){
+			symmetries[s] = has_symmetry(board, s);
+		}
+		// loop over all possible turns
+		for(turn_t* current_turn = board->sentinel->nexts[0]; current_turn != board->sentinel; current_turn = current_turn->nexts[0]){
+			// check if we can prune this turn based on symmetries
+			bool current_is_symmetric_to_another_previously_used = false;
+			for(int s=1; s<board->n_lists; ++s){
+				if(symmetries[s] && turn_in_list(current_turn, s)){
+					// the s'th list started out as empty. if now current_turn is in it, then its symmetry has been played already
+	#ifdef DEBUG
+					turn_t* pair = current_turn->pairs[s];
+					for(int i=0; i<depth; ++i) printf(" ");
+					printf("~(%d %d %d)~ <=%d=> %d %d %d\n", current_turn->row, current_turn->col, current_turn->wall, s, pair->row, pair->col, pair->wall);
+	#endif
+					current_is_symmetric_to_another_previously_used = true;
+					break;
+				}
+			}
+			// opportunity to prune the rest of this subtree if a symmetry has already been played
+			if(current_is_symmetric_to_another_previously_used) continue;
+			// perform turn, remove it from DLLs
+			execute_turn(current_turn, board);
+			prepare_symmetry_lists_for_recursion(current_turn, board);
+			// we count all calls of execute_turn for stats on pruning factor
+			(*turn_count)++;
+	#ifdef DEBUG
+			for(int i=0; i<depth; ++i) printf(" ");
+			printf("%d %d %d\n", current_turn->row, current_turn->col, current_turn->wall);
+	#endif
+			// recurse to next level of the tree (without current_turn as an option anymore)
+			minimax_ab(board, maximizer, &score, turn_count, depth+1, alpha, beta);
+			// recursion done; undo move
+			unexecute_turn(current_turn, board);
+			// undo splice from 0th list (others will have to come outside this loop)
+			repair_list(current_turn, 0);
+			if(max){
+				// MAX algorithm
+				best_turn = score > best_score ? current_turn : best_turn;
+				best_score = max(best_score, score);
+				alpha = best_score;
+			} else{
+				// MIN algorithm
+				best_turn = score < best_score ? current_turn : best_turn;
+				best_score = min(best_score, score);
+				beta = best_score;
+			}
+			if(beta <= alpha) break;
+		}
+		// repair lists to state they were in before this function call
+		for(turn_t* current_turn = board->sentinel->nexts[0]; current_turn != board->sentinel; current_turn = current_turn->nexts[0]){
+			// undo prepare_symmetry_lists_for_recursion for symmetry lists (list 0 already repaired)
+			for(int s=1; s<board->n_lists; ++s){
+				repair_list(current_turn, s);
+			}
+		}
+		(*final_value) = best_score;
+		return best_turn;
+	}
+
+	int main(){
+		board_t board;
+		stdin_to_board(&board);
+
+		long int count = 0;
+		int best_outcome;
+		turn_t* best_turn = minimax_ab(&board, 0, &best_outcome, &count, 0, INT_MIN, INT_MAX);
+
+		stats(&board, best_turn, best_outcome, count);
+
+		cleanup(&board);
+
+		return 0;
+	}
+
+__Shared Header File dotsnboxes_symmetries.h__
+
+	#include <stdio.h>
+	#include <stdlib.h>
+	#include <string.h>
+	#include <stdbool.h>
+	#include <limits.h>
+	#include <assert.h>
+
+	// types of walls
+	#define TOP 0x1
+	#define BOTTOM 0x2
+	#define LEFT 0x4
+	#define RIGHT 0x8
+	#define TOP_OR_BOTTOM   (TOP   | BOTTOM)
+	#define LEFT_OR_RIGHT   (LEFT  | RIGHT)
+	#define LEFT_OR_TOP     (LEFT  | TOP)
+	#define RIGHT_OR_BOTTOM (RIGHT | BOTTOM)
+	#define RIGHT_OR_TOP    (RIGHT | TOP)
+	#define LEFT_OR_BOTTOM  (LEFT  | BOTTOM)
+
+	// types of symmetries (also indexes into DLL arrays)
+	// note that index 0 is reserved for the valid-moves list
+
+	// first 3 are valid for any shape
+	#define HORIZONTAL 1
+	#define VERTICAL   2
+	#define ROT_180    3
+	// these 4 are only valid on square boards
+	#define ROT_90     4
+	#define ROT_270    5
+	#define DIAG_TL_BR 6
+	#define DIAG_TR_BL 7
+	#define MAX_SYMMETRIES 8
+
+	typedef short square_t;
+	typedef short wall_t;
+	typedef struct Turn turn_t;
+	struct Turn{
+		int row, col;
+		wall_t wall;
+		// arrays holding doubly linked list of turns
+		turn_t** prevs;
+		turn_t** nexts;
+		// array of symmetry-pairs
+		turn_t** pairs;
+		turn_t** inverse_pairs;
+	};
+	typedef struct Board{
+		square_t* squares;
+		turn_t* sentinel; // pointer to the sentinel of _all_ DLLs
+		int n_lists;
+		int rows;
+		int cols;
+		int player_turn;
+		int scores[2];
+	} board_t;
+
+	// usually bad practice, but ok for small code
+	#define max(a,b) (a) > (b) ? (a) : (b)
+	#define min(a,b) (a) < (b) ? (a) : (b)
+
+	turn_t* make_turn_dll(int r, int c, wall_t wall, int n_lists){
+		turn_t* new_turn = (turn_t*) malloc(sizeof(turn_t));
+		new_turn->wall = wall;
+		new_turn->row = r;
+		new_turn->col = c;
+		// make space for each dll pointer
+		new_turn->prevs = (turn_t**) malloc(sizeof(turn_t*) * n_lists);
+		new_turn->nexts = (turn_t**) malloc(sizeof(turn_t*) * n_lists);
+		// make space for pointers to symmetric-pairs
+		new_turn->pairs = (turn_t**) malloc(sizeof(turn_t*) * n_lists);
+		new_turn->inverse_pairs = (turn_t**) malloc(sizeof(turn_t*) * n_lists);
+		// link to itself in each list. set pairs to default (null)
+		for(int l=0; l<n_lists; ++l){
+			new_turn->prevs[l] = new_turn;
+			new_turn->nexts[l] = new_turn;
+			new_turn->pairs[l] = NULL;
+			new_turn->inverse_pairs[l] = NULL;
+		}
+		return new_turn;
+	}
+
+	/* insert the 'new' dll node between 'after' and 'after->next' */
+	void add_turn_dll(int list_id, turn_t* after, turn_t* new){
+		new->nexts[list_id] = after->nexts[list_id];
+		new->nexts[list_id]->prevs[list_id] = new;
+		after->nexts[list_id] = new;
+		new->prevs[list_id] = after;
+	}
+
+	/* remove the given dll entry from the specified list. return the node before 'turn' such that
+
+		add_turn_dll(l, remove_turn_dll(l, turn), turn);
+
+	has net-zero-effect */
+	turn_t* remove_turn_dll(int list_id, turn_t* turn){
+		turn_t* set_to = turn->prevs[list_id];
+		// bypass
+		turn->prevs[list_id]->nexts[list_id] = turn->nexts[list_id];
+		turn->nexts[list_id]->prevs[list_id] = turn->prevs[list_id];
+		// loop to self (for later splicing)
+		turn->nexts[list_id] = turn;
+		turn->prevs[list_id] = turn;
+		return set_to;
+	}
+
+	bool turn_equals(turn_t* a, turn_t* b){
+		if(a->row == b->row && a->col == b->col && a->wall == b->wall) return true;
+		if(abs(a->row - b->row) + abs(a->col - b->col) > 1) return false;
+		// they're not a perfect match, but they're one apart. now we need to check wall directions
+		if(a->row < b->row && a->wall == BOTTOM && b->wall == TOP) return true;
+		if(a->row > b->row && a->wall == TOP && b->wall == BOTTOM) return true;
+		if(a->col < b->col && a->wall == RIGHT && b->wall == LEFT) return true;
+		if(a->col > b->col && a->wall == LEFT && b->wall == RIGHT) return true;
+		return false;
+	}
+
+	// Symmetries function (writes symmetry into dest)
+	void sym_horizontal(turn_t* turn, turn_t* dest, board_t* board){
+		dest->row = turn->row;
+		dest->col = board->cols - turn->col - 1;
+		// if mirroring one of top/bottom, copy same.
+		// if mirroring one of left/right, flip it
+		dest->wall = turn->wall & TOP_OR_BOTTOM ? turn->wall : turn->wall ^ LEFT_OR_RIGHT;
+	}
+	void sym_vertical(turn_t* turn, turn_t* dest, board_t* board){
+		dest->col = turn->col;
+		dest->row = board->rows - turn->row - 1;
+		// if mirroring one of left/right, copy same.
+		// if mirroring one of top/bottom, flip it
+		dest->wall = turn->wall & LEFT_OR_RIGHT ? turn->wall : turn->wall ^ TOP_OR_BOTTOM;
+	}
+	void sym_rot_180(turn_t* turn, turn_t* dest, board_t* board){
+		dest->row = board->rows - turn->row - 1;
+		dest->col = board->cols - turn->col - 1;
+		// flip Left/Right or Top/Bottom
+		dest->wall = turn->wall & LEFT_OR_RIGHT ? turn->wall ^ LEFT_OR_RIGHT : turn->wall ^ TOP_OR_BOTTOM;
+	}
+	void sym_diag_tl_br(turn_t* turn, turn_t* dest, board_t* board){
+		dest->row = turn->col;
+		dest->col = turn->row;
+		// flip Left/Top or Right/Bottom
+		dest->wall = turn->wall & LEFT_OR_TOP ? turn->wall ^ LEFT_OR_TOP : turn->wall ^ RIGHT_OR_BOTTOM;
+	}
+	void sym_diag_tr_bl(turn_t* turn, turn_t* dest, board_t* board){
+		dest->row = board->cols - turn->col - 1;
+		dest->col = board->rows - turn->row - 1;
+		// flip Left/Bottom or Right/Top
+		dest->wall = turn->wall & LEFT_OR_BOTTOM ? turn->wall ^ LEFT_OR_BOTTOM : turn->wall ^ RIGHT_OR_TOP;
+	}
+	void sym_rot_90(turn_t* turn, turn_t* dest, board_t* board){
+		// composition of diagonal tl/br, then vertical flip
+		turn_t temp;
+		sym_diag_tl_br(turn, &temp, board);
+		sym_vertical(&temp, dest, board);
+	}
+	void sym_rot_270(turn_t* turn, turn_t* dest, board_t* board){
+		// composition of vertical flip, then diagonal tl/br
+		turn_t temp;
+		sym_vertical(turn, &temp, board);
+		sym_diag_tl_br(&temp, dest, board);
+	}
+	void symmetry(int type, turn_t* turn, turn_t* dest, board_t* board){
+		switch(type){
+		case HORIZONTAL:
+			sym_horizontal(turn, dest, board);
+			break;
+		case VERTICAL:
+			sym_vertical(turn, dest, board);
+			break;
+		case ROT_180:
+			sym_rot_180(turn, dest, board);
+			break;
+		// the following 4 symmetries only work for square boards, but we make no check here.
+		// it is the calling function's responsibility to only use valid symmetries
+		case ROT_90:
+			sym_rot_90(turn, dest, board);
+			break;
+		case ROT_270:
+			sym_rot_270(turn, dest, board);
+			break;
+		case DIAG_TL_BR:
+			sym_diag_tl_br(turn, dest, board);
+			break;
+		case DIAG_TR_BL:
+			sym_diag_tr_bl(turn, dest, board);
+			break;
+		}
+	}
+
+	void stdin_to_board(board_t* empty_board){
+		// assuming well-formed inputs
+		int rows = 0, cols = 0;
+		char c = fgetc(stdin);
+		while('0' <= c && c <= '9'){
+			rows *= 10;
+			rows += c-'0';
+			c = fgetc(stdin);
+		}
+		c = fgetc(stdin);
+		while('0' <= c && c <= '9'){
+			cols *= 10;
+			cols += c-'0';
+			c = fgetc(stdin);
+		}
+
+		empty_board->rows = rows;
+		empty_board->cols = cols;
+		empty_board->player_turn = 0;
+		empty_board->scores[0] = 0;
+		empty_board->scores[1] = 0;
+		// square boards have extra symmetries (90- and 270-degree rotations and diagonal reflections)
+		empty_board->n_lists = rows == cols ? 8 : 4;
+
+		int n_squares = rows * cols;
+		empty_board->squares = (square_t*) malloc(sizeof(square_t) * n_squares);
+		memset(empty_board->squares, 0, n_squares);
+
+		// create sentinel DLL node
+		// (marked as sentinel by having zero as its wall)
+		empty_board->sentinel =  make_turn_dll(0, 0, 0, empty_board->n_lists);
+
+		// create all other valid turns
+		// step 1: left/top for all grid spaces
+		for(int r=0; r<rows; r++){
+			for(int c=0; c<cols; c++){
+				add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, c, LEFT, empty_board->n_lists));
+				add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, c, TOP, empty_board->n_lists));
+			}
+		}
+		// step 2: fill in the rightmost walls
+		for(int r=0; r<rows; r++)
+			add_turn_dll(0, empty_board->sentinel, make_turn_dll(r, cols-1, RIGHT, empty_board->n_lists));
+		// step 3: fill in the bottommost walls
+		for(int c=0; c<cols; c++)
+			add_turn_dll(0, empty_board->sentinel, make_turn_dll(rows-1, c, BOTTOM, empty_board->n_lists));
+
+		// set up symmetric pairs
+		turn_t dummy;
+		for(turn_t* t=empty_board -> sentinel->nexts[0]; t != empty_board->sentinel; t = t->nexts[0]){
+			for(int sym=1; sym < empty_board->n_lists; ++sym){
+				symmetry(sym, t, &dummy, empty_board);
+	#ifdef DEBUG
+				printf("    (%d,%d,%d) <=%d=> (%d,%d,%d)\n", t->row, t->col, t->wall, sym, dummy.row, dummy.col, dummy.wall);
+	#endif
+				// center of the board, things get symmetrical with themselves. check for it here
+				if(turn_equals(t, &dummy)){
+	#ifdef DEBUG
+					printf("    self symmetric\n");
+	#endif
+				} else{
+					// find its pair (slow, but this function only gets called once, and n^2 << n!)
+					for(turn_t* cmp = empty_board -> sentinel->nexts[0]; cmp != empty_board->sentinel; cmp = cmp->nexts[0]){
+						if(turn_equals(cmp, &dummy)){
+							t->pairs[sym] = cmp;
+							cmp->inverse_pairs[sym] = t;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+	#ifdef DEBUG
+		// sanity-check: assert that all symmetries are their own inverse
+		for(turn_t* t=empty_board->sentinel->nexts[0]; t != empty_board->sentinel; t = t->nexts[0]){
+			for(int sym=1; sym < empty_board->n_lists; ++sym){
+				if(t->pairs[sym] == NULL)
+					fprintf(stdout, "(%d,%d,%d) <=%d=> ~NULL~\n", t->row, t->col, t->wall, sym);
+				else if(t->pairs[sym]->pairs[sym] == t)
+					fprintf(stdout, "(%d,%d,%d) <=%d=> (%d,%d,%d)\n", t->row, t->col, t->wall, sym, t->pairs[sym]->row, t->pairs[sym]->col, t->pairs[sym]->wall);
+				else if(t->pairs[sym]->inverse_pairs[sym] == t)
+					fprintf(stdout, "(%d,%d,%d)   %d=> (%d,%d,%d)\n", t->row, t->col, t->wall, sym, t->pairs[sym]->row, t->pairs[sym]->col, t->pairs[sym]->wall);
+				else
+					fprintf(stderr, "SYMMETRY ERROR: (%d,%d,%d) <=%d=> (%d,%d,%d)\n", t->row, t->col, t->wall, sym, t->pairs[sym]->row, t->pairs[sym]->col, t->pairs[sym]->wall);
+			}
+		}
+	#endif
+	}
+
+	bool has_symmetry(board_t* board, int sym){
+		// here's the key idea - if the list of remaining walls for a given symmetry is empty,
+		// then the board currently has that symmetry
+		return board->sentinel->nexts[sym] == board->sentinel;
+	}
+
+	bool turn_in_list(turn_t* turn, int list_id){
+		// loop to self if it's isolated and hence not in the list
+		return turn->nexts[list_id] != turn;
+	}
+
+	bool turn_played(turn_t* turn){
+		return !turn_in_list(turn, 0);
+	}
+
+	bool game_is_over(board_t* board){
+		// game is over iff total scores is the size of the board
+		return board->rows * board->cols == board->scores[0] + board->scores[1];
+	}
+
+	/* get the index of the square on the other side of the specified wall (or -1 if it would be out of bounds) */
+	int opposite(int r, int c, wall_t typ, board_t* board){
+		int i = r*board->cols + c; // flat index
+		switch(typ){
+		case TOP:
+			if(r > 0) return i-board->cols;
+			break;
+		case BOTTOM:
+			if(r < board->rows-1) return i+board->cols;
+			break;
+		case LEFT:
+			if(c > 0) return i-1;
+			break;
+		case RIGHT:
+			if(c < board->cols-1) return i+1;
+			break;
+		}
+		return -1;
+	}
+
+	/* add a wall and return the number of completed boxes*/
+	int add_wall(int r, int c, wall_t typ, board_t* board){
+		int i = r*board->cols + c; // flat index
+		board->squares[i] |= typ;
+
+		int j = opposite(r, c, typ, board);
+		if(j > -1){
+			switch(typ){
+			case TOP:
+				board->squares[j] |= BOTTOM;
+				break;
+			case BOTTOM:
+				board->squares[j] |= TOP;
+				break;
+			case LEFT:
+				board->squares[j] |= RIGHT;
+				break;
+			case RIGHT:
+				board->squares[j] |= LEFT;
+				break;
+			}
+		}
+		return (int)(board->squares[i] == 0xF) + (int) (j > -1 && board->squares[j] == 0xF);
+	}
+
+	/* remove wall and return the number of un-done boxes */
+	int remove_wall(int r, int c, wall_t typ, board_t* board){
+		int i = r*board->cols + c; // flat index
+		int j = opposite(r, c, typ, board);
+		int undone_boxes = (int)(board->squares[i] == 0xF) + (int)(j > -1 && board->squares[j] == 0xF);
+		if(j > -1){
+			switch(typ){
+			case TOP:
+				board->squares[j] &= ~BOTTOM;
+				break;
+			case BOTTOM:
+				board->squares[j] &= ~TOP;
+				break;
+			case LEFT:
+				board->squares[j] &= ~RIGHT;
+				break;
+			case RIGHT:
+				board->squares[j] &= ~LEFT;
+				break;
+			}
+		}
+		board->squares[i] &= ~typ;
+		return undone_boxes;
+	}
+
+	void print_board(board_t* board){
+		for(int r=0; r<board->rows; r++){
+			for(int c=0; c<board->cols; c++){
+				int i = r*board->cols + c; // flat index
+				printf("%d ", board->squares[i]);
+			}
+			printf("\n");
+		}
+		printf("%d : %d\n", board->scores[0], board->scores[1]);
+	}
+
+	void execute_turn(turn_t* turn, board_t* board){
+		int closed_boxes = add_wall(turn->row, turn->col, turn->wall, board);
+		if(closed_boxes > 0){
+			board->scores[board->player_turn] += closed_boxes;
+		} else{
+			board->player_turn = 1 - board->player_turn;
+		}
+	}
+
+	void prepare_symmetry_lists_for_recursion(turn_t* turn, board_t* board){
+		// two things: 1) remove this turn from list of turns required for each symmetry
+		//             2) remember where the current turn fell in each DLL (so it can be undone after recursion). this info is held in 'prevs'
+		for(int s=0; s<board->n_lists; ++s){
+			if(turn_in_list(turn, s)){
+				turn->prevs[s] = remove_turn_dll(s, turn);
+			}
+		}
+		// more things: add symmetric pairs to symmetry lists
+		for(int s=1; s<board->n_lists; ++s){
+			if(turn->pairs[s] != NULL && !turn_played(turn->pairs[s])){
+				add_turn_dll(s, board->sentinel, turn->pairs[s]);
+			}
+		}
+	}
+
+	void unexecute_turn(turn_t* turn, board_t* board){
+		int opened_boxes = remove_wall(turn->row, turn->col, turn->wall, board);
+		if(opened_boxes > 0){
+			board->scores[board->player_turn] -= opened_boxes;
+		} else{
+			board->player_turn = 1 - board->player_turn;
+		}
+	}
+
+	void repair_list(turn_t* turn, int list_id){
+		turn_t* add_after = turn->prevs[list_id];
+		turn->prevs[list_id] = turn;
+		if(add_after != turn){
+			add_turn_dll(list_id, add_after, turn);
+		}
+	}
+
+	void cleanup(board_t* board){
+		free(board->squares);
+		// free DLL
+		while(board->sentinel->nexts[0] != board->sentinel){
+			turn_t* rem = board->sentinel->nexts[0];
+			for(int l=0; l<board->n_lists; ++l)
+				remove_turn_dll(l, rem);
+			free(rem->nexts);
+			free(rem->prevs);
+			free(rem->pairs);
+			free(rem);
+		}
+		free(board->sentinel);
+	}
+
+	/* generic printouts at end */
+	void stats(board_t* board, turn_t* best_turn, int best_outcome, long int count_turns){
+		if(best_outcome > 0)
+			printf("win\n");
+		else if(best_outcome < 0)
+			printf("lose\n");
+		else
+			printf("draw\n");
+
+		char* typ = "";
+		switch(best_turn->wall){
+		case TOP:
+			typ = "TOP";
+			break;
+		case BOTTOM:
+			typ = "BOTTOM";
+			break;
+		case LEFT:
+			typ = "LEFT";
+			break;
+		case RIGHT:
+			typ = "RIGHT";
+			break;
+		}
+		printf("best option: %d %d %s\n", best_turn->row, best_turn->col, typ);
+		printf("with score %d\n", best_outcome);
+
+		long int nwalls = board->rows*board->cols*2 + board->rows + board->cols;
+		long int fact = 1, s = 0;
+		for(long int i=nwalls; i>0; --i){fact *= i; s += fact; }
+		printf("%ld walls\n", nwalls);
+		printf("%ld search-space branches\n", s);
+		printf("%ld visited\n", count_turns);
+	}
+
+![Log plot of execution times][1]
+
 ## Notes on Complexity
 
 Brute-force approaches to dots and boxes blow up in complexity _very quickly_. 
@@ -429,24 +1099,15 @@ These numbers are getting ridiculous. At least they explain why the brute-force 
 
 I added in very simple pruning using the alpha-beta algorithm. Basically, it stops searching if an ideal opponent would never give it its current opportunities. "Hey look - I win by a lot if my opponent lets me get every square!", thought no AI, ever.
 
+__edit__ I have also added pruning based on symmetrical boards. I don't use a memoization approach, just in case someday I add memoization and want to keep that analysis separate. Instead, it works like this: most lines have a "symmetric pair" somewhere else on the grid. There are up to 7 symmetries (horizontal, vertical, 180 rotation, 90 rotation, 270 rotation, diagonal, and the other diagonal). All 7 apply to square boards, but the last 4 don't apply to non-square boards. Each wall has a pointer to it's "pair" for each of these symmetries. If, going into a turn, the board is horizontally symmetric, then only _one of each horizontal pair_ needs to be played.
+
 By stopping the search high in the tree, we can save _a lot_ of time by not going down to leaves. The 'Pruning Factor' is the fraction of all-possible-branches which we had to visit. Brute-force has a pruning factor of 1. The smaller it is, the better.
 
+![Log plot of branches taken][2]
 
-	Board Size  Branches         Brute-Force Time  Alpha-Beta Time  Alpha-Beta Branches  Pruning Factor
-	----------------------------------------------------------------------------------------------------------
-	1x1         64               0.001             0.001            30                   0.46875
-	1x2         13699            0.001             0.001            727                  0.0530695671
-	2x2         1302061344       21.5              0.015            659599               0.0005065806
-	2x3         966858672404689  N/A               44.5             2170375995           2.24477067532737E-006
-
-One very interesting result is that the pruning factor gets smaller as boards get bigger. This means that as the number of branches grows, the number which we can quickly discard grows faster!
-
-![Log plot of pruning factor][1]
-
-Sadly, this is not equivalent to saying that as boards get bigger, it takes proportionally less time to solve them. We're dealing with orders of complexity.
-
-![Log plot of Alpha-Beta runtimes][2]
+![Log plot of pruning factors][3]
 
 
-  [1]: http://i.stack.imgur.com/lAveI.jpg
-  [2]: http://i.stack.imgur.com/1Zu2t.jpg
+  [1]: http://i.stack.imgur.com/IKXwp.jpg
+  [2]: http://i.stack.imgur.com/jn2yY.jpg
+  [3]: http://i.stack.imgur.com/dWTSc.jpg

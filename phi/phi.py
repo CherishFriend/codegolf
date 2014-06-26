@@ -1,0 +1,27 @@
+from math import ceil, pi, trunc, gamma, sin
+
+print ''.join(map(str,
+[33-32,
+chr(46),
+~-7,
+8>>3,
+trunc(gamma(4.3)),
+'x'.find('x'),
+22/7,
+range(4).pop(),
+len('am I phi?'),
+52%44,
+2*4,
+5|2,
+ord('/'),
+'\b',
+5+2+2,
+2<<2,
+eval("5+2+2"),
+ceil(pi),
+'\b',
+'\b',
+str(sin(5))[5],
+5&52,
+
+]))
